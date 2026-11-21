@@ -23,7 +23,8 @@ from xfoil_c.model import Airfoil as CAirfoil  # noqa: E402
 
 
 EXTENSIONS = ('max_thickness', 'x_max_thickness', 'max_camber', 'x_max_camber', 'le_radius', 'te_angle', 'area',
-              'set_hinge', 'flap', 'flap_angle', 'hinge', 'hinge_moment', 'hinge_fx', 'hinge_fy')
+              'set_hinge', 'flap', 'flap_angle', 'hinge', 'hinge_moment', 'hinge_fx', 'hinge_fy',
+              'BL_FIELDS', 'get_bl', 'get_bl_nodes')
 # removed from xfoil_c (user decision, 2026-11-20): filter only touched inverse-design state, a no-op
 REMOVED = ('filter',)
 

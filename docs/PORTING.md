@@ -261,6 +261,12 @@ New C API functions + `XFoil` members in `xfoil_c` only (the drop-in API stays i
      SCHECK); plotting dropped. Reference for tests: those upstream routines extracted and compiled with the
      reference flags (-O2 -fdefault-real-8 -fno-tree-vectorize) plus plot stubs, compared bit for bit on the
      deflected buffer.
+3. **Boundary layer (2026-11-21, after the move to this repository):** `get_n_bl`/`get_bl` (C) return per node
+   (airfoil order, then wake) the quantities of m_xoper bldump (OPER DUMP): s, x, y, Ue/Vinf, dstar, theta, Cf,
+   Hk, H*, plus N on laminar and Ctau on turbulent stations (both live in CTAU). NaN unless the last point is
+   a converged viscous one. Python: `XFoil.get_bl_nodes()` (per node) and `XFoil.get_bl()` (split into top,
+   bottom, wake, ordered downstream, |Ue|; None without a converged viscous point). Tested against the file
+   the Fortran bldump writes after the same API calls (within its print precision; `tests/test_bl.py`).
 Not wanted: surface smoothing (XFOIL only offers it through inverse design), inverse design itself.
 
 ## Phase 11 — Cleanup, Performance, and Polish

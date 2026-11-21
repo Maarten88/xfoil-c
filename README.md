@@ -20,7 +20,7 @@ from xfoil_c.model import Airfoil
   the library per instance).
 - **Errors as exceptions.** Hard errors in XFOIL (e.g. array limits) raise `xfoil_c.XFoilError` with XFOIL's
   message instead of ending the Python process.
-- **Extras:** airfoil geometry properties, flap deflection and hinge moments.
+- **Extras:** airfoil geometry properties, flap deflection and hinge moments, the boundary layer (XFOIL's DUMP).
 
 Status: tested on Linux (x86-64, gcc 14, CMake 3.31, Python 3.12) and Windows (x86-64, MinGW-w64 gcc with the
 UCRT runtime, CMake, python.org Python). Other platforms are untested.
@@ -82,6 +82,21 @@ xf.flap(0.0)                              # back to the undeflected airfoil
 `flap(angle)` sets the deflection (XFOIL's FLAP command adds to it) and repanels with the current paneling
 settings; `flap_angle` returns it and `hinge` the hinge point. Moving the hinge keeps the deflection.
 `xf.airfoil` returns the deflected airfoil. A new airfoil (`airfoil = ...`, `naca(...)`) clears hinge and deflection.
+
+Boundary layer of the last analysed point, with the quantities of XFOIL's OPER DUMP:
+
+```python
+xf.a(6.0)
+bl = xf.get_bl()                 # None unless the last point is a converged viscous one
+top = bl['top']                  # also 'bottom' and 'wake'; arrays ordered downstream
+top['x'], top['ue'], top['dstar'], top['theta'], top['cf'], top['hk'], top['hstar']
+top['n']                         # amplification factor on laminar stations (NaN when turbulent)
+top['ctau']                      # max shear coefficient on turbulent stations (NaN when laminar)
+nodes = xf.get_bl_nodes()        # the same per node in airfoil order + wake, Ue signed as in DUMP
+```
+
+Useful e.g. for the separation margin of a pressure recovery: the shape factor `hk` rises and `cf` drops
+towards zero as a turbulent boundary layer approaches separation.
 
 As in XFOIL, two airfoils are kept: the airfoil you set (the "buffer", returned by `xf.airfoil`) and the paneled
 airfoil the analysis uses. `repanel()` builds the paneled airfoil from the buffer and never changes the buffer.

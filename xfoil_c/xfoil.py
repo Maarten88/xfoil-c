@@ -472,6 +472,53 @@ class XFoil(object):
         """float: y force coefficient on the flap of the last analysed point (read-only; NaN as hinge_moment)."""
         return self._hinge()[2]
 
+    BL_FIELDS = ('s', 'x', 'y', 'ue', 'dstar', 'theta', 'cf', 'hk', 'hstar', 'n', 'ctau')
+
+    def get_bl_nodes(self):
+        """Boundary layer of the last analysed point per node, as XFOIL's OPER DUMP writes it.
+
+        Returns
+        -------
+        dict of np.ndarray
+            Keys BL_FIELDS, one value per node: the airfoil nodes in airfoil order (as the current,
+            paneled airfoil and get_cp_distribution), then the wake nodes. s: arc length, x, y: node
+            position, ue: Ue/Vinf (signed: negative on the bottom surface, as in DUMP), dstar, theta:
+            displacement and momentum thickness, cf: skin friction (0 in the wake), hk: kinematic shape
+            factor, hstar: energy shape factor H* (NaN in the wake), n: amplification factor on laminar
+            stations (else NaN), ctau: max shear coefficient on turbulent and wake stations (else NaN).
+            All but s, x, y are NaN unless the last analysed point is a converged viscous one.
+        """
+        n = self._lib.get_n_bl()
+        out = {k: np.zeros(n, dtype=c_double) for k in self.BL_FIELDS}
+        self._lib.get_bl(*[out[k].ctypes.data_as(fptr) for k in self.BL_FIELDS], byref(c_int(n)))
+        return {k: v.astype(float) for k, v in out.items()}
+
+    def get_bl(self):
+        """Boundary layer of the last analysed point per surface (XFOIL's OPER DUMP, split up).
+
+        Returns
+        -------
+        dict or None
+            None unless the last analysed point is a converged viscous one. Otherwise keys 'top',
+            'bottom' and 'wake', each a dict of np.ndarray with the keys of BL_FIELDS (see
+            get_bl_nodes), ordered downstream: top and bottom from the stagnation point to the trailing
+            edge, the wake from the trailing edge. Here ue is the magnitude Ue/Vinf on both surfaces.
+            Transition: the first station with a finite ctau (n is finite before it).
+        """
+        nodes = self.get_bl_nodes()
+        n_air = self._lib.get_n_cp()                # airfoil nodes; the rest is wake
+        ue = nodes['ue'][:n_air]
+        if np.isnan(ue).all():
+            return None
+        top = np.nonzero(ue >= 0.0)[0][::-1]
+        bottom = np.nonzero(ue < 0.0)[0]
+        wake = np.arange(n_air, len(nodes['x']))
+        res = {}
+        for side, idx in (('top', top), ('bottom', bottom), ('wake', wake)):
+            res[side] = {k: v[idx] for k, v in nodes.items()}
+            res[side]['ue'] = np.abs(res[side]['ue'])
+        return res
+
     # A new airfoil clears the hinge (the Fortran library would keep it): the original setter and
     # naca() above run unchanged, then the hinge is removed.
     _original_airfoil = airfoil
