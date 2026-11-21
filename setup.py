@@ -115,6 +115,7 @@ setup(
     description='C port of the stripped-down XFOIL python module',
     long_description=readme(),
     long_description_content_type='text/markdown',
+    url='https://github.com/Maarten88/xfoil-c',
     classifiers=[
         'Development Status :: 2 - Pre-Alpha',
         'Intended Audience :: Science/Research',
