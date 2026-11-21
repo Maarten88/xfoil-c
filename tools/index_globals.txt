@@ -1,0 +1,13 @@
+# i_xfoil globals whose values are array indices (Fortran 1-based).
+# In C they hold 0-based values: Fortran k >= 1 -> C k-1, Fortran 0 ("none") -> C -1.
+# gen_globals.py marks them and initialises them to -1; tests map Fortran values with
+# conftest.to_c_index() before comparing. Add a name here when a ported routine stores
+# index values in it. Counts (n, nbl, nsys, ...) are NOT indices.
+isys    # BL Newton-system line number of each BL station (set by iblsys)
+aijpiv  # LU pivot rows of AIJ (set by ggcalc via ludcmp)
+ist     # stagnation-point panel node (set by stfind)
+iblte   # BL station of the trailing edge, per side (set by iblpan)
+ipan    # panel node of each BL station (set by iblpan)
+itran   # BL station of transition, per side (shifted by stmove)
+imxbl   # BL station of the largest Newton change (set by update)
+ismxbl  # side of the largest Newton change (set by update)
