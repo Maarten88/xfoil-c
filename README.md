@@ -19,7 +19,8 @@ from xfoil_c.model import Airfoil
   message instead of ending the Python process.
 - **Extras:** airfoil geometry properties, flap deflection and hinge moments.
 
-Status: tested on Linux (x86-64, gcc 14, CMake 3.31, Python 3.12). Other platforms are untested.
+Status: tested on Linux (x86-64, gcc 14, CMake 3.31, Python 3.12) and Windows (x86-64, MinGW-w64 gcc with the
+UCRT runtime, CMake, python.org Python). Other platforms are untested.
 
 ## Install
 
@@ -28,6 +29,13 @@ Requirements: a C compiler (gcc), CMake >= 3.10, Python 3 with numpy.
 ```bash
 pip install .                                   # from a checkout of this repository
 ```
+
+**Windows:** build with MinGW-w64 gcc, not MSVC (the build uses gcc flags such as `-ffp-contract=off`). Use a
+UCRT build of MinGW-w64 gcc (WinLibs UCRT or MSYS2 UCRT64) and put its `bin` directory and CMake on `PATH`;
+setup.py then selects the "MinGW Makefiles" generator (override with `CMAKE_GENERATOR`). The DLL links libgcc
+statically and needs only system DLLs (KERNEL32 and the Windows UCRT), so it loads from a python.org Python
+without extra DLLs on `PATH`. Results use the Windows C runtime's math functions (`exp`, `pow`, `atan2`, ...)
+and so differ from a Linux build in the last bits.
 
 ## Usage
 

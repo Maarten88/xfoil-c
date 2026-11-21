@@ -7,7 +7,8 @@
 
 CMake builds the plain C shared library libxfoil_c (not a CPython extension module)
 and places it inside the xfoil_c package directory, where xfoil_c/_lib.py loads it
-with ctypes. This mirrors xfoil-python/setup.py, but for Linux only for now.
+with ctypes. This mirrors xfoil-python/setup.py. Linux (gcc) and Windows (MinGW-w64 gcc, not MSVC:
+on Windows the 'MinGW Makefiles' generator is used unless CMAKE_GENERATOR is set).
 
     pip install .                        # build and install
     python setup.py build_ext --inplace  # build into ./xfoil_c/ for in-tree tests
@@ -78,12 +79,18 @@ class CMakeBuild(build_ext):
             cmake_args = [
                 '-DCMAKE_BUILD_TYPE=%s' % cfg,
                 '-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_{}={}'.format(cfg.upper(), extdir),
+                # a Windows DLL is a RUNTIME output, not a LIBRARY one
+                '-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_{}={}'.format(cfg.upper(), extdir),
                 '-DCMAKE_ARCHIVE_OUTPUT_DIRECTORY_{}={}'.format(cfg.upper(), self.build_temp),
             ]
             for var, default in (('XFOIL_ARCH', ''), ('XFOIL_FAST', 'OFF')):
                 if not any(a.startswith('-D%s=' % var) for a in cmake_cmd_args):
                     cmake_args.append('-D%s=%s' % (var, os.environ.get(var, default)))
             cmake_args += cmake_cmd_args
+            cached = os.path.exists(os.path.join(self.build_temp, 'CMakeCache.txt'))
+            if sys.platform == 'win32' and not os.environ.get('CMAKE_GENERATOR') and not cached:
+                # the sources need gcc (GNU flags, -ffp-contract=off); CMake would pick MSVC
+                cmake_args.append('-GMinGW Makefiles')
 
             os.makedirs(self.build_temp, exist_ok=True)
             subprocess.check_call(['cmake', ext.cmake_lists_dir] + cmake_args, cwd=self.build_temp)
@@ -120,6 +127,7 @@ setup(
         'Development Status :: 2 - Pre-Alpha',
         'Intended Audience :: Science/Research',
         'Operating System :: POSIX :: Linux',
+        'Operating System :: Microsoft :: Windows',
         'Programming Language :: C',
         'Programming Language :: Python :: 3 :: Only',
         'Topic :: Scientific/Engineering',

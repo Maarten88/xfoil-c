@@ -96,3 +96,8 @@ if(XFOIL_FAST)
     target_compile_definitions(xfoil_c PRIVATE XFOIL_FAST=1)
 endif()
 target_link_libraries(xfoil_c PRIVATE m)
+if(MINGW)
+    # Windows (MinGW-w64 gcc): link libgcc (and winpthread, if pulled in) statically, so the DLL
+    # needs only system DLLs (KERNEL32 + the UCRT) and loads from a python.org Python as is.
+    target_link_options(xfoil_c PRIVATE -static-libgcc -static)
+endif()

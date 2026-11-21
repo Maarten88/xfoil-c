@@ -8,7 +8,12 @@
 
 #include <stdlib.h>
 #include <string.h>
-#include <threads.h>
+#if defined(_WIN32)          /* MinGW-w64 on UCRT has no C11 <threads.h>: Win32 one-time init */
+#  define WIN32_LEAN_AND_MEAN
+#  include <windows.h>
+#else
+#  include <threads.h>
+#endif
 
 _Thread_local int xfoil_print = 1;
 
@@ -26,7 +31,11 @@ void xfoil_state_init(xfoil_t *xf)
 }
 
 static xfoil_t *def = NULL;
+#if defined(_WIN32)
+static INIT_ONCE def_once = INIT_ONCE_STATIC_INIT;
+#else
 static once_flag def_once = ONCE_FLAG_INIT;
+#endif
 
 static void def_create(void)
 {
@@ -35,8 +44,21 @@ static void def_create(void)
     xfoil_state_init(def);
 }
 
+#if defined(_WIN32)
+static BOOL CALLBACK def_create_win(PINIT_ONCE once, PVOID param, PVOID *context)
+{
+    (void)once; (void)param; (void)context;
+    def_create();
+    return TRUE;
+}
+#endif
+
 xfoil_t *xfoil_default(void)
 {
+#if defined(_WIN32)
+    InitOnceExecuteOnce(&def_once, def_create_win, NULL, NULL);   /* thread-safe creation on first use */
+#else
     call_once(&def_once, def_create);     /* thread-safe creation on first use */
+#endif
     return def;
 }
