@@ -100,4 +100,10 @@ if(MINGW)
     # Windows (MinGW-w64 gcc): link libgcc (and winpthread, if pulled in) statically, so the DLL
     # needs only system DLLs (KERNEL32 + the UCRT) and loads from a python.org Python as is.
     target_link_options(xfoil_c PRIVATE -static-libgcc -static)
+    if(NOT XFOIL_ARCH STREQUAL "")
+        # With AVX/AVX-512 gcc may spill vectors to the stack with aligned moves, but the Windows ABI
+        # only aligns the stack to 16 bytes (gcc bug 54412): have the assembler emit unaligned moves
+        # instead (same speed on AVX CPUs, same results).
+        target_compile_options(xfoil_c PRIVATE -Wa,-muse-unaligned-vector-move)
+    endif()
 endif()
