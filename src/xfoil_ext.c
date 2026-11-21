@@ -44,6 +44,8 @@ static void get_geometry_impl(xfoil_t *xf, double *thick, double *x_thick, doubl
 #include "xfoil.h"
 #include "xfortran.h"
 #include "xspline.h"
+#include "sxfoil.h"
+#include "xblsys.h"
 
 #define P2(v) __builtin_powi((v), 2)
 
@@ -716,4 +718,73 @@ void flap(xfoil_t *xf, const double *angle)
 {
     xfoil_print = xf->show_output;
     XFOIL_GUARDED(flap_impl(xf, angle));
+}
+
+/* ---- boundary layer of the last analysed point (XFOIL OPER DUMP, extension) ---- */
+
+int get_n_bl(xfoil_t *xf)
+{
+    xfoil_print = xf->show_output;
+    return xf->n + (xf->lwake ? xf->nw : 0);
+}
+
+/* The quantities of XFOIL's bldump for the airfoil nodes (i < n, in airfoil order) and the wake nodes
+ * (n <= i < n + nw), with the same formulas; NaN (except s, x, y) unless the last analysed point is a
+ * converged viscous one. ampl: amplification factor N on laminar stations, ctau: max shear stress
+ * coefficient on turbulent stations and in the wake (the other one NaN; XFOIL keeps both in CTAU).
+ * Wake: cf = 0 and hstar NaN, as bldump writes no H* there. */
+static void get_bl_impl(xfoil_t *xf, double *s, double *x, double *y, double *ue, double *dstar, double *theta,
+                        double *cf, double *hk, double *hstar, double *ampl, double *ctau_out, const int *n_points)
+{
+    const int nn = xf->n + (xf->lwake ? xf->nw : 0);
+    const int n_out = *n_points < nn ? *n_points : nn;
+    const int valid = xf->scr.cp_valid && xf->lipan && xf->lvisc;
+    comset(xf);
+    const double hstinv = xf->gamm1 * P2(xf->minf / xf->qinf) / (1.0 + 0.5 * xf->gamm1 * P2(xf->minf));
+
+    for (int i = 0; i < n_out; i++) {
+        s[i] = xf->s[i];
+        x[i] = xf->x[i];
+        y[i] = xf->y[i];
+        ue[i] = dstar[i] = theta[i] = cf[i] = hk[i] = hstar[i] = ampl[i] = ctau_out[i] = NAN;
+        if (!valid) continue;
+
+        const int wake = i >= xf->n;
+        const int is = (wake || xf->gam[i] < 0.0) ? 1 : 0;
+        const int ibl = is == 0 ? xf->iblte[0] - i : xf->iblte[1] + i + 1 - xf->n;
+        const double ds = xf->dstr[is][ibl];
+        const double th = xf->thet[is][ibl];
+        double h, hs;
+        if (wake) {
+            h = ds / th;
+            hs = NAN;
+            cf[i] = 0.0;
+        } else if (th == 0.0) {
+            h = 1.0;
+            hs = 1.0;
+            cf[i] = xf->tau[is][ibl] / (0.5 * P2(xf->qinf));
+        } else {
+            h = ds / th;
+            hs = xf->tstr[is][ibl] / th;
+            cf[i] = xf->tau[is][ibl] / (0.5 * P2(xf->qinf));
+        }
+        const double g = wake ? xf->uedg[is][ibl] : xf->gam[i];
+        const double u = (g / xf->qinf) * (1.0 - xf->tklam) / (1.0 - xf->tklam * P2(g / xf->qinf));
+        const double amsq = u * u * hstinv / (xf->gamm1 * (1.0 - 0.5 * u * u * hstinv));
+        double dummy;
+        hkin(h, amsq, &hk[i], &dummy, &dummy);
+        ue[i] = u;
+        dstar[i] = ds;
+        theta[i] = th;
+        hstar[i] = hs;
+        if (ibl < xf->itran[is]) ampl[i] = xf->ctau[is][ibl];
+        else ctau_out[i] = xf->ctau[is][ibl];
+    }
+}
+
+void get_bl(xfoil_t *xf, double *s, double *x, double *y, double *ue, double *dstar, double *theta, double *cf,
+            double *hk, double *hstar, double *ampl, double *ctau, const int *n_points)
+{
+    xfoil_print = xf->show_output;
+    XFOIL_GUARDED(get_bl_impl(xf, s, x, y, ue, dstar, theta, cf, hk, hstar, ampl, ctau, n_points));
 }

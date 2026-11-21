@@ -95,4 +95,14 @@ XFOIL_API void clear_hinge(xfoil_t *xf);
 /* current flap deflection in degrees (flap() sets it; 0 after a new airfoil) */
 XFOIL_API double get_flap_angle(xfoil_t *xf);
 
+/* Boundary layer of the last analysed point, as XFOIL's OPER DUMP (bldump) writes it. get_n_bl: number
+ * of nodes, n airfoil nodes (airfoil order) plus the wake nodes if a wake exists. get_bl: per node the
+ * arc length s, x, y, Ue/Vinf, displacement and momentum thickness, Cf, kinematic shape factor Hk,
+ * H* (NaN in the wake; Cf = 0 there), the amplification factor N on laminar stations (else NaN) and
+ * the max shear coefficient Ctau on turbulent and wake stations (else NaN). All but s, x, y are NaN
+ * unless the last analysed point is a converged viscous one. Writes min(*n_points, get_n_bl) values. */
+XFOIL_API int get_n_bl(xfoil_t *xf);
+XFOIL_API void get_bl(xfoil_t *xf, double *s, double *x, double *y, double *ue, double *dstar, double *theta,
+                      double *cf, double *hk, double *hstar, double *ampl, double *ctau, const int *n_points);
+
 #endif /* XFOIL_C_H */

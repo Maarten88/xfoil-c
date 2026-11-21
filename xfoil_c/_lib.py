@@ -38,7 +38,7 @@ lib.xfoil_error.restype = c_int
 
 # public functions that can hit a hard error (run inside the C error guard, src/xerror.h)
 GUARDED = frozenset(('init', 'set_airfoil', 'set_naca', 'set_mach', 'repanel', 'alfa', 'cl', 'aseq',
-                     'cseq', 'get_cp', 'get_geometry', 'set_hinge', 'flap'))
+                     'cseq', 'get_cp', 'get_geometry', 'set_hinge', 'flap', 'get_bl'))
 
 
 class XFoilError(RuntimeError):
@@ -68,7 +68,8 @@ CONTEXT_FUNCTIONS = frozenset((
     'init', 'set_print', 'get_print', 'set_airfoil', 'get_n_coords', 'get_airfoil', 'set_naca',
     'set_reynolds', 'get_reynolds', 'set_mach', 'get_mach', 'set_xtr', 'get_xtr', 'set_n_crit', 'get_n_crit',
     'set_max_iter', 'get_max_iter', 'reset_bls', 'repanel', 'alfa', 'cl', 'aseq', 'cseq', 'get_n_cp', 'get_cp',
-    'get_geometry', 'set_hinge', 'flap', 'get_hinge', 'get_hinge_point', 'clear_hinge', 'get_flap_angle'))
+    'get_geometry', 'set_hinge', 'flap', 'get_hinge', 'get_hinge_point', 'clear_hinge', 'get_flap_angle',
+    'get_n_bl', 'get_bl'))
 
 
 class _BoundFunction:
