@@ -21,11 +21,21 @@ FORTRAN_LIB = os.path.abspath(os.environ.get('XFOIL_FORTRAN_LIB') or os.path.joi
 TOOLS = os.path.join(os.path.dirname(__file__), '..', 'tools')
 
 
-def require_xfoil_python(*parts):
-    """Path inside the xfoil-python checkout; skips the calling test (module) if it is missing."""
+def require_xfoil_python(*parts, patched=False):
+    """Path inside the xfoil-python checkout; skips the calling test (module) if it is missing.
+
+    patched=True: the test also needs the reference API of docs/xfoil-python.patch (double precision at the
+    library boundary, a()/cl() returning xtr_top/xtr_bot, get_cp_distribution() returning x, y, cp), which
+    upstream xfoil-python does not have."""
     path = os.path.join(XFOIL_PYTHON, *parts)
     if not os.path.exists(path):
         pytest.skip('xfoil-python reference not found: ' + path, allow_module_level=True)
+    if patched:
+        wrapper = os.path.join(XFOIL_PYTHON, 'xfoil', 'xfoil.py')
+        text = open(wrapper).read() if os.path.exists(wrapper) else ''
+        if 'xtrtop' not in text or 'c_double' not in text:
+            pytest.skip('xfoil-python checkout without docs/xfoil-python.patch: ' + XFOIL_PYTHON,
+                        allow_module_level=True)
     return path
 
 

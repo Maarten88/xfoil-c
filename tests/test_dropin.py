@@ -14,7 +14,7 @@ from test_api_analysis import naca0012
 
 from conftest import XFOIL_PYTHON, require_xfoil_python  # noqa: E402
 
-require_xfoil_python('xfoil', 'libxfoil_fortran.so')          # the reference build
+require_xfoil_python('xfoil', 'libxfoil_fortran.so', patched=True)          # the reference build
 sys.path.insert(0, XFOIL_PYTHON)
 import xfoil  # noqa: E402  (loads xfoil-python/xfoil/libxfoil_fortran.so)
 

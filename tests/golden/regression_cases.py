@@ -6,11 +6,19 @@ Run in a fresh process (the library state is process-global and `init` does not 
 
 Every scenario starts with a new XFoil(), uses only the public Python API and records every returned
 value as float64 arrays under "<case>:<n>:<what>". With --package xfoil (the Fortran-backed original,
-importable from xfoil-python/) the xfoil_c-only extensions are skipped.
+importable from xfoil-python/ with docs/xfoil-python.patch) the xfoil_c-only extensions are skipped.
+
+Two string entries describe the run (keys start with '__'; not results):
+- '__platform__': the OS, CPU and C library. The results depend on the math library (exp, pow, atan2, ... differ
+  in the last bits between glibc versions and the Windows UCRT), so bit-identity with the golden file is only
+  expected on the platform that made it.
+- '__unstable__': the result keys recorded inside `with r.unstable()`: sequences whose convergence depends on
+  the last bits of the arithmetic, which only the bit-identical comparison checks (see run(), case 1).
 """
 import argparse
+import contextlib
+import platform
 import sys
-import ast
 import importlib
 from pathlib import Path
 
@@ -39,9 +47,32 @@ def random_shape():
     return x, y
 
 
+def platform_tag():
+    """OS, CPU and C library (math library) of this process, e.g. 'linux x86_64 glibc 2.41'."""
+    lib, ver = platform.libc_ver()
+    if sys.platform == 'win32':
+        lib, ver = 'windows', platform.version()
+    return ' '.join(s for s in (sys.platform, platform.machine(), lib, ver) if s)
+
+
+def results(npz):
+    """The result arrays of a loaded .npz (without the '__' description entries)."""
+    return {k: v for k, v in npz.items() if not k.startswith('__')}
+
+
 class Recorder:
     def __init__(self, xf, ext):
         self.xf, self.ext, self.out, self.k = xf, ext, {}, 0
+        self.unstable_keys, self._unstable = [], False
+
+    @contextlib.contextmanager
+    def unstable(self):
+        """Results recorded inside are marked as depending on the last bits of the arithmetic."""
+        self._unstable = True
+        try:
+            yield
+        finally:
+            self._unstable = False
 
     def put(self, case, what, value, ext=False):
         """Common results are numbered in call order; xfoil_c-only (ext) results reuse the number of the
@@ -53,6 +84,8 @@ class Recorder:
             self.k += 1
         assert key not in self.out, key
         self.out[key] = np.atleast_1d(np.asarray(value, dtype=np.float64))
+        if self._unstable:
+            self.unstable_keys.append(key)
 
     def state(self, case):
         xf = self.xf
@@ -77,7 +110,7 @@ def run(package):
     pkg = importlib.import_module(package)
     Airfoil = importlib.import_module(package + '.model').Airfoil
     ext = package == 'xfoil_c'
-    out = {}
+    out, unstable = {}, []
 
     def new(case):
         xf = pkg.XFoil()
@@ -92,8 +125,15 @@ def run(package):
     xf.Re, xf.max_iter = 1e6, 100
     r.state('naca0012'); r.call('naca0012', 'a', 10); r.cp('naca0012'); r.call('naca0012', 'cl', 1.0)
     xf.max_iter = 150
-    r.call('naca0012', 'aseq', -20, 20, 0.5); r.call('naca0012', 'cseq', -0.5, 0.5, 0.05); r.cp('naca0012')
-    out.update(r.out)
+    r.call('naca0012', 'aseq', -20, 20, 0.5)
+    # Unstable: XFOIL starts each point from the previous boundary layer, here the stalled one aseq leaves at
+    # alpha = 19.5. Which of the 20 cseq points converge (and to which solution) depends on the last bits:
+    # measured 2 (golden) to 20 unconverged over glibc versions, the Windows UCRT and correctly rounded math,
+    # and with the UCRT the rest converged to a spurious solution (cd 0.0021 instead of 0.0054). Case 8 runs
+    # the same cseq from an attached boundary layer.
+    with r.unstable():
+        r.call('naca0012', 'cseq', -0.5, 0.5, 0.05); r.cp('naca0012')
+    out.update(r.out); unstable += r.unstable_keys
 
     # 2: cambered NACA, low Re, n_crit and forced transition
     xf, r = new('n2412')
@@ -139,7 +179,14 @@ def run(package):
     r.state('shape'); r.call('shape', 'aseq', -2, 10, 1.0); r.call('shape', 'cl', 0.9); r.cp('shape')
     out.update(r.out)
 
-    # 8: extensions: hinge moment and flap (xfoil_c only)
+    # 8: the cseq of case 1 from an attached boundary layer (aseq within -10..10 instead of -20..20)
+    xf, r = new('cseq')
+    xf.airfoil = Airfoil(*naca0012_coords())
+    xf.Re, xf.max_iter = 1e6, 150
+    r.call('cseq', 'aseq', -10, 10, 0.5); r.call('cseq', 'cseq', -0.5, 0.5, 0.05); r.cp('cseq')
+    out.update(r.out)
+
+    # 9: extensions: hinge moment and flap (xfoil_c only)
     if ext:
         xf, r = new('flap')
         xf.naca('2412'); xf.Re, xf.max_iter = 1e6, 100
@@ -149,6 +196,8 @@ def run(package):
         xf.flap(-12.0); r.call('flap', 'aseq', 0, 6, 2.0)      # absolute: -12 deg (was cumulative -7 before 2026-11-21)
         xf.Re = 0.0; r.call('flap', 'cl', 0.5)
         out.update(r.out)
+    out['__platform__'] = np.array(platform_tag())
+    out['__unstable__'] = np.array(sorted(unstable))
     return out
 
 

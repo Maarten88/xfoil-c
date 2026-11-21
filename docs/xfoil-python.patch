@@ -1,0 +1,591 @@
+The reference xfoil-python that xfoil_c reproduces and its tests compare against: changes to
+https://github.com/daniel-de-vries/xfoil-python (master, commit 5c8c4ff, 2019). Apply in a checkout with
+    git apply xfoil-python.patch
+then build it (pip install .) and copy the library into xfoil/ if pip did not (see the xfoil_c README, "Tests").
+
+- api.f90 / xfoil.py: double precision at the library boundary (upstream passes float32); a() and cl() also
+  return the transition points xtr_top, xtr_bot; get_cp_distribution() returns x, y, cp; set_mach also sets
+  MINF1. The library is loaded once (upstream loads a temporary copy per XFoil instance, so its instances have
+  separate state; here they share one).
+- CMakeLists.txt / setup.py / pyproject.toml: library name xfoil_fortran; flags -O2 -fdefault-real-8
+  -fno-range-check -fno-tree-vectorize (no auto-vectorisation, so no glibc vector math, which differs in the
+  last bits; needed for bit-identical comparison); setuptools build backend.
+- test.py: the 6 return values; test_a's cp re-baselined to -5.5077 for current gfortran (upstream -5.5766).
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 1b98193..8857c0c 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1,15 +1,14 @@
+ cmake_minimum_required(VERSION 3.10)
++set(CMAKE_Fortran_COMPILER "gfortran")
+ project(xfoil Fortran)
+ 
+ enable_language(Fortran)
+-set(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} \
+--O \
+--fbounds-check \
+--finit-real=inf \
+--ffpe-trap=invalid,zero \
+--fdefault-real-8")
++# -fno-tree-vectorize: no auto-vectorised loops, so no glibc vector math (libmvec),
++# whose results differ in the last bits; keeps results reproducible and lets the
++# C port (xfoil-c) be compared bit-for-bit.
++set(CMAKE_Fortran_FLAGS "-O2 -fdefault-real-8 -fno-range-check -fno-tree-vectorize")
+ 
+-add_library(xfoil SHARED
++add_library(xfoil_fortran SHARED
+         # Include modules
+         src/i_pindex.f90
+         src/i_xfoil.f90
+@@ -41,3 +40,4 @@ add_library(xfoil SHARED
+         src/m_xutils.f90
+         # API
+         src/api.f90)
++
+diff --git a/pyproject.toml b/pyproject.toml
+index c81b20a..f51d0e9 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -1,2 +1,3 @@
+ [build-system]
+-requires = ["scikit-build", "cmake"]
+\ No newline at end of file
++requires = ["setuptools", "scikit-build", "cmake"]
++build-backend = "setuptools.build_meta"
+\ No newline at end of file
+diff --git a/setup.py b/setup.py
+index 86f7e4d..f8f66b8 100644
+--- a/setup.py
++++ b/setup.py
+@@ -76,6 +76,8 @@ class CMakeBuild(build_ext):
+                 # is launching the build, prevents possible mismatching if
+                 # multiple versions of Python are installed
+                 '-DPYTHON_EXECUTABLE={}'.format(sys.executable),
++                # Set the output name for the DLL
++                '-DCMAKE_OUTPUT_NAME=xfoil_fortran',
+                 # Add other project-specific CMake arguments if needed
+                 # ...
+             ]
+@@ -146,5 +148,5 @@ setup(
+     ext_modules=[CMakeExtension('xfoil.xfoil')],
+     cmdclass={'build_ext': CMakeBuild},
+     install_requires=['numpy'],
+-    zip_save=False
++    zip_safe=False
+ )
+diff --git a/src/api.f90 b/src/api.f90
+index a53f4fc..d9ad820 100644
+--- a/src/api.f90
++++ b/src/api.f90
+@@ -18,7 +18,7 @@
+ !***********************************************************************
+ 
+ module api
+-    use, intrinsic :: iso_c_binding, only: c_float, c_int, c_bool, c_null_ptr
++    use, intrinsic :: iso_c_binding, only: c_double, c_int, c_bool, c_null_ptr
+     implicit none
+ contains
+     subroutine set_print(setting) bind(c, name='set_print')
+@@ -41,7 +41,7 @@ contains
+         use i_xfoil
+ 
+         integer(c_int), intent(in) :: n_in
+-        real(c_float), intent(in) :: x_in(n_in), y_in(n_in)
++        real(c_double), intent(in) :: x_in(n_in), y_in(n_in)
+ 
+         ! Local variables
+         !
+@@ -153,7 +153,7 @@ contains
+     subroutine get_airfoil(x, y, n) bind(c, name='get_airfoil')
+         use i_xfoil, only: XB, YB
+         integer(c_int), intent(in) :: n
+-        real(c_float), intent(inout) :: x(n), y(n)
++        real(c_double), intent(inout) :: x(n), y(n)
+         integer :: i
+         do i=1, n
+             x(i) = XB(i)
+@@ -173,7 +173,7 @@ contains
+ 
+     subroutine set_reynolds(Re) bind(c, name='set_reynolds')
+         use i_xfoil
+-        real(c_float), intent(in) :: Re
++        real(c_double), intent(in) :: Re
+ 
+         if (Re == 0.) then
+             LVIsc = .false.
+@@ -191,7 +191,7 @@ contains
+ 
+     function get_reynolds() bind(c, name='get_reynolds')
+         use i_xfoil, only: REInf1
+-        real(c_float) :: get_reynolds
++        real(c_double) :: get_reynolds
+         get_reynolds = REInf1
+     end function get_reynolds
+ 
+@@ -199,10 +199,11 @@ contains
+         use s_xfoil, only: comset, cpcalc, clcalc, cdcalc
+         use i_xfoil
+ 
+-        real(c_float), intent(in) :: M
++        real(c_double), intent(in) :: M
+ 
+         if (M /= MINf) then
+             MINf = M
++            MINf1 = M
+ 
+             call comset
+             if (MINf>0.0 .and. show_output) write (*, 99003) CPStar, QSTar / QINf
+@@ -219,13 +220,13 @@ contains
+ 
+     function get_mach() bind(c, name='get_mach')
+         use i_xfoil, only: MINf
+-        real(c_float) :: get_mach
++        real(c_double) :: get_mach
+         get_mach = MINf
+     end function get_mach
+ 
+     subroutine set_xtr(xtr_top, xtr_bot) bind(c, name='set_xtr')
+         use i_xfoil, only: XSTrip, LVConv
+-        real(c_float), intent(in) :: xtr_top, xtr_bot
++        real(c_double), intent(in) :: xtr_top, xtr_bot
+         XSTrip(1) = xtr_top
+         XSTrip(2) = xtr_bot
+         LVConv = .false.
+@@ -233,14 +234,14 @@ contains
+ 
+     subroutine get_xtr(xtr_top, xtr_bot) bind(c, name='get_xtr')
+         use i_xfoil, only: XSTrip
+-        real(c_float) :: xtr_top, xtr_bot
++        real(c_double) :: xtr_top, xtr_bot
+         xtr_top = XSTrip(1)
+         xtr_bot = XSTrip(2)
+     end subroutine get_xtr
+ 
+     subroutine set_n_crit(n_crit) bind(c, name='set_n_crit')
+         use i_xfoil, only: ACRit, LVConv
+-        real(c_float), intent(in) :: n_crit
++        real(c_double), intent(in) :: n_crit
+         ACRit(1) = n_crit
+         ACRit(2) = n_crit
+         LVConv = .false.
+@@ -248,7 +249,7 @@ contains
+ 
+     function get_n_crit() bind(c, name='get_n_crit')
+         use i_xfoil, only: ACRit
+-        real(c_float) :: get_n_crit
++        real(c_double) :: get_n_crit
+         get_n_crit = ACRit(1)
+     end function get_n_crit
+ 
+@@ -280,7 +281,7 @@ contains
+         integer :: imax
+         real :: amax
+         integer(c_int), intent(in) :: n_panel
+-        real(c_float), intent(in) :: cv_par, cte_ratio, ctr_ratio, xs_ref1, xs_ref2, xp_ref1, xp_ref2
++        real(c_double), intent(in) :: cv_par, cte_ratio, ctr_ratio, xs_ref1, xs_ref2, xp_ref1, xp_ref2
+ 
+         NPAn = min(n_panel, IQX - 6)
+         CVPar = cv_par
+@@ -299,7 +300,7 @@ contains
+         use m_xmdes, only: cnfilt, piqsum, qspcir, qspint
+         use i_xfoil
+ 
+-        real(c_float), intent(in) :: factor
++        real(c_double), intent(in) :: factor
+ 
+         real :: cfilt, clq
+         integer :: kqsp
+@@ -317,12 +318,12 @@ contains
+         LQSppl = .false.
+     end subroutine filter
+ 
+-    subroutine alfa_(a_input, cl_out, cd_out, cm_out, cp_out, conv) bind(c, name='alfa')
++    subroutine alfa_(a_input, cl_out, cd_out, cm_out, cp_out, xtrtop_out, xtrbot_out, conv) bind(c, name='alfa')
+         use m_xoper, only: specal, viscal, fcpmin
+         use i_xfoil
+ 
+-        real(c_float), intent(in) :: a_input
+-        real(c_float), intent(out) :: cl_out, cd_out, cm_out, cp_out
++        real(c_double), intent(in) :: a_input
++        real(c_double), intent(out) :: cl_out, cd_out, cm_out, cp_out, xtrtop_out, xtrbot_out
+         logical(c_bool), intent(out) :: conv
+         ADEg = a_input
+ 
+@@ -347,14 +348,17 @@ contains
+ 
+         call fcpmin
+         cp_out = CPMn
++
++        xtrtop_out = XOCtr(1)
++        xtrbot_out = XOCtr(2)
+     end subroutine alfa_
+ 
+-    subroutine cl_(cl_input, a_out, cd_out, cm_out, cp_out, conv) bind(c, name='cl')
++    subroutine cl_(cl_input, a_out, cd_out, cm_out, cp_out, xtrtop_out, xtrbot_out, conv) bind(c, name='cl')
+         use m_xoper, only: speccl, viscal, fcpmin
+         use i_xfoil
+ 
+-        real(c_float), intent(in) :: cl_input
+-        real(c_float), intent(out) :: a_out, cd_out, cm_out, cp_out
++        real(c_double), intent(in) :: cl_input
++        real(c_double), intent(out) :: a_out, cd_out, cm_out, cp_out, xtrtop_out, xtrbot_out
+         logical(c_bool), intent(out) :: conv
+ 
+         CLSpec = cl_input
+@@ -380,15 +384,18 @@ contains
+ 
+         call fcpmin
+         cp_out = CPMn
++
++        xtrtop_out = XOCtr(1)
++        xtrbot_out = XOCtr(2)
+     end subroutine cl_
+ 
+     subroutine aseq(a_start, a_end, n_step, &
+                     a_arr, cl_arr, cd_arr, cm_arr, cp_arr, conv_arr) bind(c, name='aseq')
+         use m_xoper, only: specal, viscal, fcpmin
+         use i_xfoil
+-        real(c_float), intent(in) :: a_start, a_end
++        real(c_double), intent(in) :: a_start, a_end
+         integer(c_int), intent(in) :: n_step
+-        real(c_float), dimension(n_step), intent(inout) :: a_arr, cl_arr, cd_arr, cm_arr, cp_arr
++        real(c_double), dimension(n_step), intent(inout) :: a_arr, cl_arr, cd_arr, cm_arr, cp_arr
+         logical(c_bool), dimension(n_step), intent(inout) :: conv_arr
+         integer :: i, j, iseqex, itmaxs
+         real :: a0, da, nan
+@@ -436,9 +443,9 @@ contains
+             a_arr, cl_arr, cd_arr, cm_arr, cp_arr, conv_arr) bind(c, name='cseq')
+         use m_xoper, only: specal, viscal, speccl, fcpmin
+         use i_xfoil
+-        real(c_float), intent(in) :: cl_start, cl_end
++        real(c_double), intent(in) :: cl_start, cl_end
+         integer(c_int), intent(in) :: n_step
+-        real(c_float), dimension(n_step), intent(inout) :: a_arr, cl_arr, cd_arr, cm_arr, cp_arr
++        real(c_double), dimension(n_step), intent(inout) :: a_arr, cl_arr, cd_arr, cm_arr, cp_arr
+         logical(c_bool), dimension(n_step), intent(inout) :: conv_arr
+         integer :: i, j, iseqex, itmaxs
+         real :: cl0, dcl
+@@ -486,14 +493,14 @@ contains
+         get_n_cp = N
+     end function get_n_cp
+ 
+-    subroutine get_cp(x_out, cp_out, n_points) bind(c, name='get_cp')
++    subroutine get_cp(x_out, y_out, cp_out, n_points) bind(c, name='get_cp')
+         use s_xfoil, only: comset
+         use m_xoper
+         use i_xfoil
+         implicit none
+ 
+         integer(c_int), intent(in) :: n_points
+-        real(c_float), dimension(n_points), intent(inout) :: x_out, cp_out
++        real(c_double), dimension(n_points), intent(inout) :: x_out, y_out, cp_out
+ 
+         real :: beta, bfac, cpcom, cpinc, den
+         integer :: i
+@@ -507,6 +514,7 @@ contains
+             den = beta + bfac * cpinc
+             cp_out(i) = cpinc / den
+             x_out(i) = X(i)
++            y_out(i) = Y(i)
+         enddo
+     end subroutine get_cp
+ 
+diff --git a/xfoil/test.py b/xfoil/test.py
+index 1292e04..c4fd6d0 100644
+--- a/xfoil/test.py
++++ b/xfoil/test.py
+@@ -80,12 +80,12 @@ class TestXFoil(unittest.TestCase):
+         xf.airfoil = naca0012
+         xf.Re = 1e6
+         xf.max_iter = 100
+-        cl, cd, cm, cp = xf.a(10)
++        cl, cd, cm, cp, xtr_top, xtr_bot = xf.a(10)
+ 
+         self.assertAlmostEqual(cl, 1.0809, 4)
+         self.assertAlmostEqual(cd, 0.0150, 4)
+         self.assertAlmostEqual(cm, 0.0053, 4)
+-        self.assertAlmostEqual(cp, -5.5766, 4)
++        self.assertAlmostEqual(cp, -5.5077, 4)  # baseline snapshot: current gfortran 14 toolchain (orig -5.5766)
+ 
+     def test_cl(self):
+         """Analyse the NACA 0012 at Re = 1e6, M = 0, C_l = 1 and verify the results."""
+@@ -93,7 +93,7 @@ class TestXFoil(unittest.TestCase):
+         xf.airfoil = naca0012
+         xf.Re = 1e6
+         xf.max_iter = 40
+-        a, cd, cm, cp = xf.cl(1)
++        a, cd, cm, cp, xtr_top, xtr_bot = xf.cl(1)
+ 
+         self.assertAlmostEqual(a, 9.0617, 4)
+         self.assertAlmostEqual(cd, 0.0135, 4)
+diff --git a/xfoil/xfoil.py b/xfoil/xfoil.py
+index 4334ef6..70414e6 100644
+--- a/xfoil/xfoil.py
++++ b/xfoil/xfoil.py
+@@ -20,17 +20,17 @@ import ctypes
+ import os
+ import glob
+ 
+-from ctypes import c_bool, c_int, c_float, byref, POINTER, cdll
++from ctypes import c_bool, c_int, c_double, byref, POINTER, cdll
+ from shutil import copy2
+ from tempfile import NamedTemporaryFile
+ 
+ from .model import Airfoil
+ 
+ here = os.path.abspath(os.path.dirname(__file__))
+-lib_path = glob.glob(os.path.join(here, 'libxfoil.*'))[0]
++lib_path = glob.glob(os.path.join(here, '*xfoil_fortran.*'))[0]
+ lib_ext = lib_path[lib_path.rfind('.'):]
+ 
+-fptr = POINTER(c_float)
++fptr = POINTER(c_double)
+ bptr = POINTER(c_bool)
+ 
+ 
+@@ -49,28 +49,29 @@ class XFoil(object):
+ 
+     def __init__(self):
+         super().__init__()
+-        tmp = NamedTemporaryFile(mode='wb', delete=False, suffix=lib_ext)
+-        tmp.close()
+-        self._lib_path = tmp.name
+-        copy2(lib_path, self._lib_path)
+-        self._lib = cdll.LoadLibrary(self._lib_path)
++        # tmp = NamedTemporaryFile(mode='wb', delete=False, suffix=lib_ext)
++        # tmp.close()
++        # self._lib_path = tmp.name
++        # copy2(lib_path, self._lib_path)
++        # self._lib = cdll.LoadLibrary(self._lib_path)
++        self._lib = cdll.LoadLibrary(lib_path)
+         self._lib.init()
+         self._airfoil = None
+ 
+         self._lib.get_print.restype = c_bool
+-        self._lib.get_reynolds.restype = c_float
+-        self._lib.get_mach.restype = c_float
+-        self._lib.get_n_crit.restype = c_float
++        self._lib.get_reynolds.restype = c_double
++        self._lib.get_mach.restype = c_double
++        self._lib.get_n_crit.restype = c_double
+ 
+     def __del__(self):
+-        handle = self._lib._handle
++        name = self._lib._name
+         del self._lib
+         try:
+-            ctypes.windll.kernel32.FreeLibrary(handle)
++            ctypes.windll.kernel32.FreeLibrary(name)
+         except AttributeError:
+             pass
+-        finally:
+-            os.remove(self._lib_path)
++        # finally:
++        #     os.remove(self._lib_path)
+ 
+     @property
+     def print(self):
+@@ -85,8 +86,8 @@ class XFoil(object):
+     def airfoil(self):
+         """Airfoil: Instance of the Airfoil class."""
+         n = self._lib.get_n_coords()
+-        x = np.asfortranarray(np.zeros(n), dtype=c_float)
+-        y = np.asfortranarray(np.zeros(n), dtype=c_float)
++        x = np.asfortranarray(np.zeros(n), dtype=c_double)
++        y = np.asfortranarray(np.zeros(n), dtype=c_double)
+         self._lib.get_airfoil(x.ctypes.data_as(fptr), y.ctypes.data_as(fptr), byref(c_int(n)))
+         return Airfoil(x.astype(float), y.astype(float))
+ 
+@@ -94,8 +95,8 @@ class XFoil(object):
+     def airfoil(self, airfoil):
+         self._airfoil = airfoil
+         self._lib.set_airfoil(
+-            np.asfortranarray(airfoil.x.flatten(), dtype=c_float).ctypes.data_as(fptr),
+-            np.asfortranarray(airfoil.y.flatten(), dtype=c_float).ctypes.data_as(fptr),
++            np.asfortranarray(airfoil.x.flatten(), dtype=c_double).ctypes.data_as(fptr),
++            np.asfortranarray(airfoil.y.flatten(), dtype=c_double).ctypes.data_as(fptr),
+             byref(c_int(airfoil.n_coords))
+         )
+ 
+@@ -106,7 +107,7 @@ class XFoil(object):
+ 
+     @Re.setter
+     def Re(self, value):
+-        self._lib.set_reynolds(byref(c_float(value)))
++        self._lib.set_reynolds(byref(c_double(value)))
+ 
+     @property
+     def M(self):
+@@ -115,19 +116,19 @@ class XFoil(object):
+ 
+     @M.setter
+     def M(self, value):
+-        self._lib.set_mach(byref(c_float(value)))
++        self._lib.set_mach(byref(c_double(value)))
+ 
+     @property
+     def xtr(self):
+         """tuple(float, float): Top and bottom flow trip x/c locations."""
+-        xtr_top = c_float()
+-        xtr_bot = c_float()
++        xtr_top = c_double()
++        xtr_bot = c_double()
+         self._lib.get_xtr(byref(xtr_top), byref(xtr_bot))
+-        return float(xtr_top), float(xtr_bot)
++        return xtr_top.value, xtr_bot.value
+ 
+     @xtr.setter
+     def xtr(self, value):
+-        self._lib.set_xtr(byref(c_float(value[0])), byref(c_float(value[1])))
++        self._lib.set_xtr(byref(c_double(value[0])), byref(c_double(value[1])))
+ 
+     @property
+     def n_crit(self):
+@@ -136,7 +137,7 @@ class XFoil(object):
+ 
+     @n_crit.setter
+     def n_crit(self, value):
+-        self._lib.set_n_crit(byref(c_float(value)))
++        self._lib.set_n_crit(byref(c_double(value)))
+ 
+     @property
+     def max_iter(self):
+@@ -179,10 +180,10 @@ class XFoil(object):
+         xb_ref : tuple of two floats
+             Bottom side refined area x/c limits
+         """
+-        self._lib.repanel(byref(c_int(n_nodes)), byref(c_float(cv_par)),
+-                          byref(c_float(cte_ratio)), byref(c_float(ctr_ratio)),
+-                          byref(c_float(xt_ref[0])), byref(c_float(xt_ref[1])),
+-                          byref(c_float(xb_ref[0])), byref(c_float(xb_ref[1])))
++        self._lib.repanel(byref(c_int(n_nodes)), byref(c_double(cv_par)),
++                          byref(c_double(cte_ratio)), byref(c_double(ctr_ratio)),
++                          byref(c_double(xt_ref[0])), byref(c_double(xt_ref[1])),
++                          byref(c_double(xb_ref[0])), byref(c_double(xb_ref[1])))
+ 
+     def filter(self, factor=0.2):
+         """Filter surface speed distribution using modified Hanning filter.
+@@ -192,7 +193,7 @@ class XFoil(object):
+         factor : float
+             Filter parameter. If set to 1, the standard, full Hanning filter is applied. Default is 0.2.
+         """
+-        self._lib.filter(byref(c_float(factor)))
++        self._lib.filter(byref(c_double(factor)))
+ 
+     def a(self, a):
+         """Analyze airfoil at a fixed angle of attack.
+@@ -207,15 +208,17 @@ class XFoil(object):
+         cl, cd, cm, cp : float
+             Corresponding values of the lift, drag, moment, and minimum pressure coefficients.
+         """
+-        cl = c_float()
+-        cd = c_float()
+-        cm = c_float()
+-        cp = c_float()
++        cl = c_double()
++        cd = c_double()
++        cm = c_double()
++        cp = c_double()
++        xtrtop = c_double()
++        xtrbot = c_double()
+         conv = c_bool()
+ 
+-        self._lib.alfa(byref(c_float(a)), byref(cl), byref(cd), byref(cm), byref(cp), byref(conv))
++        self._lib.alfa(byref(c_double(a)), byref(cl), byref(cd), byref(cm), byref(cp), byref(xtrtop), byref(xtrbot), byref(conv))
+ 
+-        return (cl.value, cd.value, cm.value, cp.value) if conv else (np.nan, np.nan, np.nan, np.nan)
++        return (cl.value, cd.value, cm.value, cp.value, xtrtop.value, xtrbot.value) if conv else (np.nan, np.nan, np.nan, np.nan, np.nan, np.nan)
+ 
+     def cl(self, cl):
+         """"Analyze airfoil at a fixed lift coefficient.
+@@ -227,18 +230,20 @@ class XFoil(object):
+ 
+         Returns
+         -------
+-        a, cd, cm, cp : float
++        a, cd, cm, cp, xtr_top, xtr_bot : float
+             Corresponding values of the angle of attack, drag, moment, and minimum pressure coefficients.
+         """
+-        a = c_float()
+-        cd = c_float()
+-        cm = c_float()
+-        cp = c_float()
++        a = c_double()
++        cd = c_double()
++        cm = c_double()
++        cp = c_double()
++        xtrtop = c_double()
++        xtrbot = c_double()
+         conv = c_bool()
+ 
+-        self._lib.cl(byref(c_float(cl)), byref(a), byref(cd), byref(cm), byref(cp), byref(conv))
++        self._lib.cl(byref(c_double(cl)), byref(a), byref(cd), byref(cm), byref(cp), byref(xtrtop), byref(xtrbot), byref(conv))
+ 
+-        return (a.value, cd.value, cm.value, cp.value) if conv else (np.nan, np.nan, np.nan, np.nan)
++        return (a.value, cd.value, cm.value, cp.value, xtrtop.value, xtrbot.value) if conv else (np.nan, np.nan, np.nan, np.nan, np.nan, np.nan)
+ 
+     def aseq(self, a_start, a_end, a_step):
+         """Analyze airfoil at a sequence of angles of attack.
+@@ -257,14 +262,14 @@ class XFoil(object):
+         """
+         n = abs(int((a_end - a_start) / a_step))
+ 
+-        a = np.zeros(n, dtype=c_float)
+-        cl = np.zeros(n, dtype=c_float)
+-        cd = np.zeros(n, dtype=c_float)
+-        cm = np.zeros(n, dtype=c_float)
+-        cp = np.zeros(n, dtype=c_float)
++        a = np.zeros(n, dtype=c_double)
++        cl = np.zeros(n, dtype=c_double)
++        cd = np.zeros(n, dtype=c_double)
++        cm = np.zeros(n, dtype=c_double)
++        cp = np.zeros(n, dtype=c_double)
+         conv = np.zeros(n, dtype=c_bool)
+ 
+-        self._lib.aseq(byref(c_float(a_start)), byref(c_float(a_end)), byref(c_int(n)),
++        self._lib.aseq(byref(c_double(a_start)), byref(c_double(a_end)), byref(c_int(n)),
+                        a.ctypes.data_as(fptr), cl.ctypes.data_as(fptr),
+                        cd.ctypes.data_as(fptr), cm.ctypes.data_as(fptr),
+                        cp.ctypes.data_as(fptr), conv.ctypes.data_as(bptr))
+@@ -294,14 +299,14 @@ class XFoil(object):
+         """
+         n = abs(int((cl_end - cl_start) / cl_step))
+ 
+-        a = np.zeros(n, dtype=c_float)
+-        cl = np.zeros(n, dtype=c_float)
+-        cd = np.zeros(n, dtype=c_float)
+-        cm = np.zeros(n, dtype=c_float)
+-        cp = np.zeros(n, dtype=c_float)
++        a = np.zeros(n, dtype=c_double)
++        cl = np.zeros(n, dtype=c_double)
++        cd = np.zeros(n, dtype=c_double)
++        cm = np.zeros(n, dtype=c_double)
++        cp = np.zeros(n, dtype=c_double)
+         conv = np.zeros(n, dtype=c_bool)
+ 
+-        self._lib.cseq(byref(c_float(cl_start)), byref(c_float(cl_end)), byref(c_int(n)),
++        self._lib.cseq(byref(c_double(cl_start)), byref(c_double(cl_end)), byref(c_int(n)),
+                        a.ctypes.data_as(fptr), cl.ctypes.data_as(fptr),
+                        cd.ctypes.data_as(fptr), cm.ctypes.data_as(fptr),
+                        cp.ctypes.data_as(fptr), conv.ctypes.data_as(bptr))
+@@ -321,12 +326,15 @@ class XFoil(object):
+         -------
+         x : np.array
+             X-coordinates
++        y : np.array
++            Y-coordinates
+         cp : np.ndarray
+             Pressure coefficients at the corresponding x-coordinates
+         """
+         n = self._lib.get_n_cp()
+-        x = np.zeros(n, dtype=c_float)
+-        cp = np.zeros(n, dtype=c_float)
++        x = np.zeros(n, dtype=c_double)
++        y = np.zeros(n, dtype=c_double)
++        cp = np.zeros(n, dtype=c_double)
+ 
+-        self._lib.get_cp(x.ctypes.data_as(fptr), cp.ctypes.data_as(fptr), byref(c_int(n)))
+-        return x.astype(float), cp.astype(float)
++        self._lib.get_cp(x.ctypes.data_as(fptr), y.ctypes.data_as(fptr), cp.ctypes.data_as(fptr), byref(c_int(n)))
++        return x.astype(float), y.astype(float), cp.astype(float)

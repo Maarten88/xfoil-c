@@ -1,20 +1,23 @@
 # xfoil_c
 
 A C port of [xfoil-python](https://github.com/daniel-de-vries/xfoil-python), the Python module around Mark Drela's
-XFOIL airfoil analysis code. The Fortran core is translated to C; the Python API is the same, so existing code
-switches with one import:
+XFOIL airfoil analysis code. The Fortran core is translated to C. The reference is xfoil-python with a few
+changes (`docs/xfoil-python.patch`; see "Differences from upstream xfoil-python" below); its Python API is
+kept, so code written for it switches with one import:
 
 ```python
 from xfoil_c import XFoil          # instead of: from xfoil import XFoil
 from xfoil_c.model import Airfoil
 ```
 
-- **Same results.** The default (exact) build reproduces the Fortran xfoil-python results bit for bit; this is
-  checked routine by routine against the Fortran library (about 600 tests).
+- **Same results.** The default (exact) build reproduces the Fortran results of the reference bit for bit (on
+  the same platform; see "Tests"); this is checked routine by routine against the Fortran library (about 600
+  tests).
 - **Faster.** About 0.93x the Fortran run time in the exact build, about 0.67x with the optional fast build for
   your CPU (viscous analyses).
-- **Independent instances.** Every `XFoil()` has its own state (the Fortran module shares one state between all
-  instances), and instances can run in parallel threads.
+- **Independent instances.** Every `XFoil()` has its own state, and instances can run in parallel threads (the
+  reference shares one Fortran state between all instances; upstream xfoil-python loads a temporary copy of
+  the library per instance).
 - **Errors as exceptions.** Hard errors in XFOIL (e.g. array limits) raise `xfoil_c.XFoilError` with XFOIL's
   message instead of ending the Python process.
 - **Extras:** airfoil geometry properties, flap deflection and hinge moments.
@@ -49,7 +52,7 @@ xf.repanel()                       # optional: XFOIL's default paneling (160 nod
 xf.Re = 1e6
 xf.max_iter = 100
 
-cl, cd, cm, cp_min, xtr_top, xtr_bot = xf.a(4.0)        # one angle of attack
+cl, cd, cm, cp_min, xtr_top, xtr_bot = xf.a(4.0)        # one angle of attack (with transition points)
 a, cl, cd, cm, cp_min = xf.aseq(-4, 12, 0.5)            # a sequence (end value excluded, like range())
 x, y, cp = xf.get_cp_distribution()                     # Cp of the last analysed point
 ```
@@ -83,7 +86,16 @@ settings; `flap_angle` returns it and `hinge` the hinge point. Moving the hinge 
 As in XFOIL, two airfoils are kept: the airfoil you set (the "buffer", returned by `xf.airfoil`) and the paneled
 airfoil the analysis uses. `repanel()` builds the paneled airfoil from the buffer and never changes the buffer.
 
-### Differences from xfoil-python
+### Differences from upstream xfoil-python
+
+These come from the reference version (`docs/xfoil-python.patch`), which xfoil_c reproduces:
+
+- `a()` and `cl()` return 6 values: also the transition points `xtr_top`, `xtr_bot` (upstream: 4).
+- `get_cp_distribution()` returns `x, y, cp` (upstream: `x, cp`).
+- Double precision at the library boundary (upstream passes float32, so its results differ slightly).
+- Setting `M` also sets XFOIL's `MINF1` (upstream does not).
+
+### Differences from the reference
 
 Deliberate, everything else is identical:
 
@@ -120,12 +132,18 @@ python -m pytest tests -q
 
 On its own the suite checks the library against recorded reference results (`tests/golden/`) and runs the
 API, error-handling and thread-safety tests. Most tests compare every ported routine bit for bit with the
-Fortran library; they need an [xfoil-python](https://github.com/daniel-de-vries/xfoil-python) checkout next to
-this repository (or `XFOIL_PYTHON_DIR=/path/to/xfoil-python`) with the Fortran library built, and are skipped
-otherwise. For bit-identity the Fortran library must be built without auto-vectorisation (`-fno-tree-vectorize`
-in its `CMAKE_Fortran_FLAGS`): otherwise gfortran uses glibc's vector math, which differs in the last bits.
-In a non-exact build variant the bit-identical tests are skipped and `tests/test_reference.py` checks the
-results against the reference within tolerance.
+Fortran library; they need an [xfoil-python](https://github.com/daniel-de-vries/xfoil-python) checkout with
+`docs/xfoil-python.patch` applied (its header says how), next to this repository (or
+`XFOIL_PYTHON_DIR=/path/to/xfoil-python`), with the Fortran library built, and are skipped otherwise. The patch
+also builds the Fortran library without auto-vectorisation (`-fno-tree-vectorize`): otherwise gfortran uses
+glibc's vector math, which differs in the last bits.
+
+The results also depend on the platform's math library (`exp`, `pow`, `atan2`, ... differ in the last bits
+between glibc versions and the Windows C runtime). The golden file records the platform it was made on, and
+the bit-for-bit comparison with it (`tests/test_regression.py`) runs only there. Everywhere else, and in a
+non-exact build variant, `tests/test_reference.py` checks the results against it within tolerance and
+requires no more unconverged points. It leaves out one sequence whose convergence depends on the last bits
+(a `cseq` started from a stalled boundary layer, see `tests/golden/regression_cases.py`, case 1).
 
 ## Project layout
 

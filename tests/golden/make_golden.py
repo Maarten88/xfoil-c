@@ -1,9 +1,10 @@
 """Regenerate tests/golden/api_golden.npz from the current xfoil_c build, after checking that every
 result the Fortran-backed `xfoil` package can produce is identical (NaN positions equal).
 
-    python tests/golden/make_golden.py        (from xfoil-c/; needs xfoil-python built)
+    python tests/golden/make_golden.py        (from xfoil-c/; needs xfoil-python with docs/xfoil-python.patch built)
 
-Only regenerate when a clean-up step changes results on purpose (numerics steps), and record why.
+Only regenerate when a clean-up step changes results on purpose (numerics steps), and record why. The file
+records the platform it was made on ('__platform__'); test_regression is strict only there.
 """
 import os
 import subprocess
@@ -36,7 +37,8 @@ if __name__ == '__main__':
     with tempfile.TemporaryDirectory() as td:
         c = produce('xfoil_c', os.path.join(td, 'c.npz'))
         f = produce('xfoil', os.path.join(td, 'f.npz'))
-    common = sorted(set(c) & set(f))
+    assert c['__platform__'] == f['__platform__'] and set(f['__unstable__']) <= set(c['__unstable__'])
+    common = sorted(k for k in set(c) & set(f) if not k.startswith('__'))
     assert set(f) <= set(c), sorted(set(f) - set(c))
     bad = [k for k in common if not same(c[k], f[k])]
     # intentional differences (clean-up C6c): cseq(0.0, 1.2, 0.2) has 6 points with step 0.2 (Fortran package:
@@ -44,6 +46,8 @@ if __name__ == '__main__':
     INTENTIONAL = {'n23012:003:cseq', 'n23012:004:cp'}
     assert set(bad) <= INTENTIONAL, sorted(set(bad) - INTENTIONAL)
     np.savez_compressed(HERE / 'api_golden.npz', **c)
-    nan = sum(int(np.isnan(v).sum()) for v in c.values())
-    print('golden: %d arrays (%d also checked against Fortran), %d values, %d NaN'
-          % (len(c), len(common), sum(v.size for v in c.values()), nan))
+    res = {k: v for k, v in c.items() if not k.startswith('__')}
+    nan = sum(int(np.isnan(v).sum()) for v in res.values())
+    print('golden (%s): %d arrays (%d also checked against Fortran), %d values, %d NaN; unstable: %s'
+          % (c['__platform__'], len(res), len(common), sum(v.size for v in res.values()), nan,
+             ', '.join(c['__unstable__'])))
